@@ -1,0 +1,22 @@
+[
+  {
+    "query": "What is Retrieval-Augmented Generation (RAG)?",
+    "ground_truth": "RAG is a technique that combines retrieval and generation where a system first retrieves relevant documents and then uses them to generate answers, improving accuracy by grounding responses in actual documents.",
+    "example_context": "RAG (Retrieval-Augmented Generation) is a technique in NLP that enhances LLM capabilities by incorporating external knowledge retrieval. The system retrieves relevant documents first, then uses them as context for answer generation."
+  },
+  {
+    "query": "How does hybrid search work?",
+    "ground_truth": "Hybrid search combines BM25 keyword matching with semantic vector search, using both lexical and semantic similarity to improve retrieval precision.",
+    "example_context": "Hybrid search combines BM25 lexical matching (50% weight) with vector embedding search (50% weight) to balance keyword precision with semantic understanding."
+  },
+  {
+    "query": "Why is reranking important in RAG?",
+    "ground_truth": "Reranking uses cross-encoders to re-score initial retrieval results, improving precision by identifying truly relevant documents despite initial retrieval mistakes.",
+    "example_context": "Cross-encoder reranking re-scores the top retrieval results to improve precision. It can identify truly relevant documents that initial retrieval might have ranked lower, improving answer quality."
+  },
+  {
+    "query": "What are the benefits of citations in RAG?",
+    "ground_truth": "Citations in RAG provide transparency, traceability, and allow users to verify answers by checking original sources. They also enforce faithfulness in generated responses.",
+    "example_context": "Citations enforce accountability by linking each claim in the generated answer to specific source documents. This improves transparency and allows users to verify information."
+  }
+]
