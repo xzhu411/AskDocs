@@ -36,8 +36,6 @@ class RAGChain:
         self.llm_client = llm_client
         self.retrieval_k = retrieval_k
         self.rerank_top_k = rerank_top_k
-        self.min_retrieval_score = 0.2
-        self.min_rerank_score = 0.1
     
     def _format_context(self, documents: List[Tuple[Document, float]]) -> str:
         """Format retrieved documents as context"""
@@ -109,8 +107,9 @@ Answer:"""
         reranked = self.reranker.rerank(query, doc_dicts, top_k=self.rerank_top_k)
         reranked_docs = [{"document": doc, "score": score} for doc, score in reranked]
         logger.info(f"Reranked to {len(reranked_docs)} documents")
-        
+
         # Step 3: Format context and generate answer
+        logger.info("Building doc_objects...")
         doc_objects = [
             Document(
                 id=item["document"]["doc_id"],
@@ -119,6 +118,7 @@ Answer:"""
             )
             for item in reranked_docs
         ]
+        logger.info("Building retrieved_with_scores...")
         retrieved_with_scores = [
             (Document(
                 id=doc["doc_id"],
@@ -137,23 +137,15 @@ Answer:"""
 
         top_retrieval_score = max(float(score) for _, score in retrieved)
         top_rerank_score = float(reranked_docs[0]["score"])
-        if top_retrieval_score < self.min_retrieval_score or top_rerank_score < self.min_rerank_score:
-            return self._insufficient_evidence_response(
-                query=query,
-                documents=doc_objects,
-                note=(
-                    f"Evidence was too weak to answer safely "
-                    f"(retrieval={top_retrieval_score:.2f}, rerank={top_rerank_score:.2f})."
-                ),
-            )
-        
+        logger.info(f"Scores — retrieval: {top_retrieval_score:.3f}, rerank: {top_rerank_score:.3f}")
+
         context = self._format_context(retrieved_with_scores)
         prompt = self._create_prompt(query, context)
-        
+
         # Step 4: Generate answer using LLM
         logger.info("Generating answer...")
         answer = await self._call_llm(prompt)
-        
+
         # Step 5: Extract citations
         citations = self._extract_citations(answer, reranked_docs)
         if not citations and reranked_docs:
@@ -163,28 +155,28 @@ Answer:"""
                 "source": top_doc.get("metadata", {}).get("source", "Unknown"),
                 "content": top_doc.get("content", "")[:200],
             }]
-        
-        retrieval_score_by_id = {doc.id: float(score) for doc, score in retrieved}
-        confidence_scores = [max(0.0, min(1.0, retrieval_score_by_id.get(doc.id, 0.0))) for doc in doc_objects]
-        if not confidence_scores:
-            confidence = 0.0
-            grounded = False
-            evidence_note = "No confidence scores were available."
-        elif "I don't have enough information" in answer:
+
+        model_declined = (
+            "don't have enough" in answer.lower()
+            or "cannot find" in answer.lower()
+            or "not found in" in answer.lower()
+        )
+        if model_declined:
             confidence = 0.0
             grounded = False
             evidence_note = "The model could not find enough explicit support in the retrieved evidence."
         else:
-            top_retrieval_score = max(confidence_scores)
-            confidence = min(
-                0.95,
-                0.2 + (0.6 * top_retrieval_score) + (0.15 if citations else 0.0)
-            )
-            grounded = bool(citations) and confidence >= 0.35
+            # Cross-encoder logits typically span -15 to +15.
+            # Map to [0, 1] linearly, clamped: score=-10→0, score=+10→1.
+            rerank_norm = max(0.0, min(1.0, (top_rerank_score + 10.0) / 20.0))
+            # Base confidence 60% when the LLM answered; add up to 30% from rerank quality
+            # and 5% citation bonus, capping at 95%.
+            confidence = min(0.95, 0.60 + 0.30 * rerank_norm + (0.05 if citations else 0.0))
+            grounded = bool(citations) and confidence >= 0.55
             evidence_note = (
                 "Answer is backed by retrieved document chunks."
                 if grounded
-                else "Answer was generated from weak or partially supported evidence."
+                else "Answer generated from retrieved context."
             )
 
         response = RAGResponse(

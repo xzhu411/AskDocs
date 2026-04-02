@@ -30,7 +30,12 @@ class Settings(BaseSettings):
         "http://0.0.0.0:5173",
     ]
     
-    # Ollama (Local LLM)
+    # LLM provider: "claude" or "ollama"
+    llm_provider: str = "claude"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-6"
+
+    # Ollama (Local LLM, fallback)
     ollama_base_url: str = "http://localhost:11434"
     llm_model: str = "mistral"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"

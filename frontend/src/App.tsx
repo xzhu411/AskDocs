@@ -138,27 +138,36 @@ function App() {
     const stages = [
       { percent: 18, label: 'Retrieving documents', detail: 'Searching the uploaded files for relevant sections.' },
       { percent: 34, label: 'Ranking evidence', detail: 'Comparing the best chunks for your question.' },
-      { percent: 56, label: 'Drafting answer', detail: 'Generating the answer with the local model.' },
+      { percent: 56, label: 'Drafting answer', detail: 'Generating the answer with the AI model.' },
       { percent: 74, label: 'Collecting citations', detail: 'Linking the answer back to source text.' },
       { percent: 88, label: 'Finalizing response', detail: 'Formatting the result for display.' },
     ]
 
+    const waitingDetails = [
+      'Still generating — this can take a moment...',
+      'Almost there, processing your documents...',
+      'The model is thinking, please wait...',
+    ]
+
     let index = 0
+    let waitingIndex = 0
     queryProgressIntervalRef.current = window.setInterval(() => {
-      if (index >= stages.length) {
-        return
+      if (index < stages.length) {
+        const stage = stages[index]
+        if (!stage) return
+        setProgress((current) => {
+          const safeCurrent = current ?? createProgressState()
+          return safeCurrent.percent >= stage.percent
+            ? safeCurrent
+            : mergeProgressState(safeCurrent, { ...stage, visible: true, tone: 'blue' })
+        })
+        index += 1
+      } else {
+        // All stages shown — keep pulsing the detail text so user knows it's still working
+        const detail = waitingDetails[waitingIndex % waitingDetails.length]
+        waitingIndex += 1
+        setProgress((current) => mergeProgressState(current, { detail, visible: true, tone: 'blue' }))
       }
-      const stage = stages[index]
-      if (!stage) {
-        return
-      }
-      setProgress((current) => {
-        const safeCurrent = current ?? createProgressState()
-        return safeCurrent.percent >= stage.percent
-          ? safeCurrent
-          : mergeProgressState(safeCurrent, { ...stage, visible: true, tone: 'blue' })
-      })
-      index += 1
     }, 1200)
   }
 

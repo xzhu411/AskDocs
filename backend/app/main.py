@@ -1,5 +1,4 @@
 """Main FastAPI application"""
-import contextlib
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +33,31 @@ doc_processor: Optional[DocumentProcessor] = None
 llm_client: Optional[object] = None
 
 
-# Mock LLM client for testing (you'll replace with actual Ollama client)
+class ClaudeClient:
+    """Anthropic Claude client using native async for fast, reliable LLM inference"""
+
+    def __init__(self, api_key: str, model: str):
+        import anthropic
+        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        self.model = model
+        logger.info(f"Initialized Claude client: model={model}")
+
+    async def generate(self, prompt: str) -> str:
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text
+        except asyncio.CancelledError:
+            logger.info("Claude generation cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Claude client error: {repr(e)}")
+            return "I apologize, but I encountered an error generating a response."
+
+
 class OllamaClient:
     """Ollama client for local LLM inference"""
     
@@ -107,12 +130,19 @@ async def lifespan(app: FastAPI):
         
         reranker = CrossEncoderReranker()
         
-        llm_client = OllamaClient(
-            base_url=settings.ollama_base_url,
-            model=settings.llm_model,
-            timeout_seconds=settings.ollama_timeout_seconds,
-            num_predict=settings.ollama_num_predict,
-        )
+        if settings.llm_provider == "claude" and settings.anthropic_api_key:
+            llm_client = ClaudeClient(
+                api_key=settings.anthropic_api_key,
+                model=settings.anthropic_model,
+            )
+        else:
+            logger.warning("Claude API key not set, falling back to Ollama")
+            llm_client = OllamaClient(
+                base_url=settings.ollama_base_url,
+                model=settings.llm_model,
+                timeout_seconds=settings.ollama_timeout_seconds,
+                num_predict=settings.ollama_num_predict,
+            )
         
         rag_chain = RAGChain(
             retriever=retriever,
@@ -169,13 +199,6 @@ async def health_check():
     )
 
 
-async def _wait_for_disconnect(http_request: Request) -> None:
-    """Wait until the client disconnects."""
-    while True:
-        if await http_request.is_disconnected():
-            return
-        await asyncio.sleep(0.2)
-
 
 def _load_documents_for_file(processor: DocumentProcessor, file_path: Path) -> list[Document]:
     """Load a supported file into chunked documents."""
@@ -207,71 +230,54 @@ def _reindex_uploaded_documents() -> int:
 @app.post("/query", response_model=RAGResponse)
 async def query_documents(request: QueryRequest, http_request: Request):
     """Query the document database with RAG"""
-    
+
     if not rag_chain:
         raise HTTPException(status_code=503, detail="RAG system not initialized")
-    
+
     try:
         start_time = time.time()
-        generation_task = asyncio.create_task(rag_chain.generate(request.query))
-        disconnect_task = asyncio.create_task(_wait_for_disconnect(http_request))
-
-        done, pending = await asyncio.wait(
-            {generation_task, disconnect_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        if disconnect_task in done:
-            generation_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await generation_task
-            raise HTTPException(status_code=499, detail="Query cancelled by client")
-
-        response = await generation_task
-        disconnect_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await disconnect_task
-        
+        logger.info(f"Query received: {request.query[:80]}")
+        rag_response = await rag_chain.generate(request.query)
         processing_time = time.time() - start_time
-        
-        # Format response
+        logger.info(f"Query completed in {processing_time:.2f}s")
+
         citations = [
             Citation(
                 index=c["index"],
                 source=c["source"],
-                snippet=c.get("content", "")[:100]
+                snippet=c.get("content", "")[:100],
             )
-            for c in response.citations
+            for c in rag_response.citations
         ]
-        
+
         documents = [
             DocumentModel(
                 id=doc.id,
-                content=doc.content[:500],  # Truncate for API response
+                content=doc.content[:500],
                 metadata={
-                    "source": doc.metadata.get("source", "Unknown"),
-                    "file_type": doc.metadata.get("file_type", "unknown")
+                    "source": doc.metadata.get("source", "Unknown") if isinstance(doc.metadata, dict) else "Unknown",
+                    "file_type": doc.metadata.get("file_type", "unknown") if isinstance(doc.metadata, dict) else "unknown",
                 },
-                score=0.0
+                score=0.0,
             )
-            for doc in response.documents
+            for doc in rag_response.documents
         ]
-        
+
         return RAGResponse(
             query=request.query,
-            answer=response.answer,
+            answer=rag_response.answer,
             citations=citations,
             documents=documents,
-            confidence=response.confidence,
-            grounded=response.grounded,
-            evidence_note=response.evidence_note,
-            processing_time=processing_time
+            confidence=rag_response.confidence,
+            grounded=rag_response.grounded,
+            evidence_note=rag_response.evidence_note,
+            processing_time=processing_time,
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing query: {e}")
+        logger.error(f"Error processing query ({type(e).__name__}): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
